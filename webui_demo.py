@@ -1,6 +1,6 @@
 import gradio as gr
 from Prompt import MessageHandler, OpenAI, system_message
-from Emotion import get_emotion, parse_emotion_result, client
+from Emotion import get_emotion, parse_emotion_result, listen
 import speech_recognition as sr
 import threading
 import time
@@ -31,7 +31,6 @@ def stop_recording():
     print("语音输入停止")
     recording = False
 
-    
     # 确保audio不为None
     if audio is None:
         return ("", 
@@ -45,46 +44,27 @@ def stop_recording():
             f.write(audio.get_wav_data())
             print("音频保存成功")
         
-        # 语音识别
-        with open('recording.wav', 'rb') as f:
-            audio_data = f.read()
-            # 添加音频数据检查
-            if len(audio_data) == 0:
-                print("警告：音频数据为空")
-                return ("", 
-                        gr.update(interactive=True), 
-                        gr.update(interactive=False),
-                        "录音为空")
-                        
-            result = client.asr(audio_data, 'wav', 16000, {
-                'dev_pid': 1537,
-            })
-            print("完整的语音识别返回结果：", result)  # 添加完整日志
-
-            # 添加结果检查
-            if not isinstance(result, dict):
-                print(f"错误：语音识别返回了非预期格式：{result}")
-                return ("",
-                        gr.update(interactive=True),
-                        gr.update(interactive=False),
-                        "语音识别失败")
-
-            if "result" in result and result["result"]:
-                text = result["result"][0]
-                # 情绪分析
-                emotion_data = get_emotion(text)
-                parse_emotion_result(emotion_data)
-                print("情绪分析结果：", emotion_data)
-                
-                # 写入文件
-                with open("temp_emotion.txt", "a", encoding="utf-8") as f:
-                    f.write("对话:" + text + "\n")
-                print("情绪分析完成")
-
-                return (text, 
-                        gr.update(interactive=True), 
-                        gr.update(interactive=False),
-                        "录音完成")
+        # 使用OpenAI的Whisper进行语音识别
+        text = listen("recording.wav")
+        
+        if text:
+            # 情绪分析
+            emotion_data = get_emotion(text)
+            parse_emotion_result(emotion_data)
+            print("情绪分析结果：", emotion_data)
+            
+            # 构建格式化的显示文本，修复引号问题
+            formatted_text = f'用户："{text}"\n{emotion_data}'
+            
+            return (formatted_text, 
+                    gr.update(interactive=True), 
+                    gr.update(interactive=False),
+                    "录音完成")
+        else:
+            return ("", 
+                    gr.update(interactive=True), 
+                    gr.update(interactive=False),
+                    "语音识别失败")
             
     except Exception as e:
         print(f"Error: {e}")
@@ -92,11 +72,6 @@ def stop_recording():
                 gr.update(interactive=True), 
                 gr.update(interactive=False),
                 "录音处理失败")
-    
-    return ("", 
-            gr.update(interactive=True), 
-            gr.update(interactive=False),
-            "录音完成")
 
 def record_audio():
     """后台录音线程"""

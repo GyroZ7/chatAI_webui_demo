@@ -1,37 +1,17 @@
-import urllib.request
-import json
-from http import HTTPStatus
-from dashscope import Generation
-from dashscope.api_entities.dashscope_response import Role
-import dashscope
 import datetime
 import speech_recognition as sr
-from aip import AipSpeech
+from openai import OpenAI
+from pathlib import Path
 
-dashscope.api_key='sk-0db9c8b38b3149d4a0248b52d1c80413'
-APP_ID = '62638968'
-API_KEY = 'hONMgNeQUw7jivk9BzVhmupV'
-SECRET_KEY = 'NYuVHHoynxKT42St6OiGMGW93SwWDZyU'
-client = AipSpeech(APP_ID, API_KEY, SECRET_KEY)
-client_id='xPJX1UekpflBJWbrvIfYFyil'
-client_secret='tQjn3j7k9Iaym2MGHDvYYDu9K4jZ3TzF'
+# OpenAI配置
+client = OpenAI(
+    api_key='sk-zc47213449f70a2328e93d2ea4e73aa410f26a20511GgIPP',  # 请替换为您的OpenAI API密钥
+    base_url="https://api.gptsapi.net/v1"  # 设置自定义API基础地址
+)
 
 now = datetime.datetime.now()
 time_string = now.strftime("%Y-%m-%d") 
-filename = "Generated\Text\emotion.txt"
-
-
-#Token授权
-def get_token():
-    host = 'https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=' + client_id + '&client_secret=' + client_secret
-    request = urllib.request.Request(host)
-    request.add_header('Content-Type', 'application/json; charset=UTF-8')
-    response = urllib.request.urlopen(request)
-    token_content = response.read()
-    if token_content:
-        token_info = json.loads(token_content)
-        token_key = token_info['access_token']
-    return token_key
+filename = "Generated/Text/emotion.txt"
 
 #麦克风语音录入
 def rec(rate=16000):
@@ -42,73 +22,54 @@ def rec(rate=16000):
             audio = r.listen(source)
         with open("recording.wav", "wb") as f:
             f.write(audio.get_wav_data())
-    except:
-        print("语音录入发生错误")
+    except Exception as e:
+        print(f"语音录入发生错误: {e}")
 
 def listen(filename):
-    with open('recording.wav', 'rb') as f:
-        audio_data = f.read()
-        result = client.asr(audio_data, 'wav', 16000, {
-        'dev_pid': 1536,
-    })
-        try:
-            result_text = result["result"][0]
-            print(result_text)
-            with open(filename, "a",encoding="utf-8") as f:  # 使用模式"a"以追加方式打开文件
-                    f.write("对话:" + result_text + "\n") 
-        except:
-            return ""
-    return result_text
+    try:
+        audio_file = Path(filename)
+        with open(audio_file, "rb") as audio:
+            result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio,
+                response_format="text"
+            )
+            print(result)
+            with open("temp_emotion.txt", "a", encoding="utf-8") as f:
+                f.write("对话:" + result + "\n")
+            return result
+    except Exception as e:
+        print(f"语音识别错误: {e}")
+        return ""
 
 #情绪识别 
 def get_emotion(content):
     try:
-        token = get_token()
-        url = 'https://aip.baidubce.com/rpc/2.0/nlp/v1/emotion'
-        params = dict()
-        params['scene'] = 'talk'
-        params['text'] = content
-        params = json.dumps(params).encode('utf-8')
+        prompt = f"""
+        请分析以下文本的情绪，并按照以下格式返回：
+        主要情绪：[情绪标签]
+        次要情绪：[具体情绪]
+        仅返回情绪标签，不要其他解释。
+        文本：{content}
+        """
         
-        # 验证token
-        if not token:
-            print("错误：无法获取token")
-            return {}
-            
-        access_token = token
-        url = url + "?access_token=" + access_token
-        url = url + "&charset=UTF-8"
-        
-        request = urllib.request.Request(url=url, data=params)
-        request.add_header('Content-Type', 'application/json')
-        
-        # 添加超时设置
-        response = urllib.request.urlopen(request, timeout=10)
-        content = response.read()
-        
-        if content:
-            content = content.decode('utf-8')
-            data = json.loads(content)
-            return data
-        else:
-            print("警告：情绪识别返回空结果")
-            return {}
-            
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "你是一个情绪分析专家。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+        return response.choices[0].message.content
     except Exception as e:
         print(f"情绪识别发生错误: {e}")
         return {}
-    
-def parse_emotion_result(data):  
-    items = data.get('items', [])
-    for item in items:
-        label = item.get('label', '')
-        if label != 'neutral':
-            subitems = item.get('subitems', [])
-            for subitem in subitems:
-                sub_label = subitem.get('label', '')
-                if sub_label:
-                    print(f"Emotion: {label}, Sub-Emotion: {sub_label}")
-                    with open(filename, "a", encoding="utf-8") as f:  # 使用模式"a"以追加方式打开文件
-                        f.write("情绪:" + f"Emotion: {label}, Sub-Emotion: {sub_label}" + "\n") 
-        else:
-            print("")
+
+def parse_emotion_result(emotion_text):
+    try:
+        with open(filename, "a", encoding="utf-8") as f:
+            f.write("情绪:" + emotion_text + "\n")
+        print(emotion_text)
+    except Exception as e:
+        print(f"解析情绪结果时发生错误: {e}")
