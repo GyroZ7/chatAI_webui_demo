@@ -199,53 +199,60 @@ def save_history(history):
 def main():
     with gr.Blocks(title="护理助手对话系统", css=css) as demo:
         gr.Markdown("# 护理助手对话系统")
-        gr.Markdown("### 请上传用户信息/用户偏好文本文件。")
         
         with gr.Row():
-            # 文件选择器
-            file_input = gr.File(
-                label="选择偏好文件",
-                file_types=[".txt"]
-            )
-        gr.Markdown("### 可选择手动输入或语音输入任意一种输入方法。")
-        with gr.Row():
-            with gr.Column():
-                # 手动文本输入
-                manual_input = gr.Textbox(
-                    label="手动输入情绪状态",
-                    placeholder="请输入情绪状态描述。参考：对话:\"...\", 情绪:\"...\"",
-                    lines=11
+            # 左侧列 - 输入部分
+            with gr.Column(scale=1):
+                # 文件选择器
+                file_input = gr.File(
+                    label="选择偏好文件",
+                    file_types=[".txt"]
                 )
+                
+                gr.Markdown("### 可选择手动输入或语音输入任意一种输入方法。")
+                
+                # 手动输入框
+                with gr.Group(visible=True):
+                    gr.Markdown("&nbsp;⚪")
+                    manual_input = gr.Textbox(
+                        label="手动输入情绪状态",
+                        placeholder="请输入情绪状态描述。参考：对话:\"...\", 情绪:\"...\"",
+                        lines=3
+                    )
+                
+                # 语音输入框
+                with gr.Group(visible=True):
+                    gr.Markdown("&nbsp;⚪")
+                    record_status = gr.Textbox(
+                        label="录音状态",
+                        value="准备就绪",
+                        interactive=False
+                    )
+                    voice_text = gr.Textbox(
+                        label="语音输入结果",
+                        placeholder="识别结果将自动转换，无需操作。如果同时有语音与文本输入，将优先使用文本输入。",
+                        interactive=False,
+                        lines=3
+                    
+                    )
+                    with gr.Row():
+                        start_button = gr.Button("开始录音")
+                        stop_button = gr.Button("停止录音", interactive=False)
+                # 提交按钮
+                submit_btn = gr.Button("获取建议", variant="primary")
             
-            with gr.Column():
-                # 语音输入部分
-                record_status = gr.Textbox(
-                    label="录音状态",
-                    value="准备就绪",
-                    interactive=False
-                )
-                with gr.Row():
-                    start_button = gr.Button("开始录音")
-                    stop_button = gr.Button("停止录音", interactive=False)
-                voice_text = gr.Textbox(
-                    label="语音输入结果",
-                    placeholder="识别结果将自动转换，无需操作。如果同时有语音与文本输入，将优先使用文本输入。",
-                    interactive=False,
-                    lines=3
-                )
+            # 右侧列 - 输出部分
+            with gr.Column(scale=1):
+                with gr.Group(visible=True):
+                    gr.Markdown("#### 助手回复")
+                    output_text = gr.Textbox(
+                        label="助手建议",
+                        lines=15,
+                        interactive=False
+                    )
         
-        with gr.Row():
-            # 提交按钮
-            submit_btn = gr.Button("获取建议", variant="primary")
-            
-        with gr.Row():
-            # 输出文本框
-            output_text = gr.Textbox(
-                label="助手建议",
-                lines=2,
-                interactive=False
-            )
         gr.Markdown("***")
+        gr.HTML("<hr style='height: 5px; background-color: black; border: none;'>")
         gr.Markdown("# 对话历史")
         with gr.Row():
             # 对话历史（使用Markdown）
