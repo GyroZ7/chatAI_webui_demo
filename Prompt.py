@@ -151,6 +151,7 @@ class MessageHandler:
         self.documents = documents
         self.system_message = system_message
         self.voice_manager = VoiceManager()
+        self.conversation_history = []  # 添加对话历史列表
 
     def process_message(self, input_text):
         """
@@ -171,13 +172,29 @@ class MessageHandler:
         for doc in self.documents:
             if doc['tag'] == '用户发言&情绪':
                 doc = {'path': temp_emotion_path, 'prefix': doc['prefix'], 'tag': doc['tag']}
-            current_documents.append(doc)
+                current_documents.append(doc)
         
         # 获取响应
         response = self.get_completion_from_document(
             current_documents, 
             self.system_message
         )
+        
+        try:
+            # 解析响应并更新对话历史
+            response_dict = json.loads(response)
+            # 更新对话历史，添加用户输入和助手回复
+            self.conversation_history.append({
+                "role": "user",
+                "content": f"Document 2:\n<用户发言&情绪>\n{input_text}\n</用户发言&情绪>\n"
+            })
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": response_dict['dialogue']
+            })
+        except json.JSONDecodeError:
+            print("无法解析响应JSON")
+        
         return response
 
     def get_and_play_response(self):
@@ -213,17 +230,25 @@ class MessageHandler:
                     print(f"读取文件出错 {doc_info['path']}: {e}")
                     continue
 
-            # 添加系统消息
-            full_prompt += f"\n{system_message}"
+            # 构建消息列表
+            messages = [{"role": "system", "content": system_message}]
             
-            print("发送到 API 的完整 Prompt：", full_prompt)
+            # 添加历史对话记录（最多保留最近的10轮对话）
+            if self.conversation_history:
+                recent_history = self.conversation_history[-10:]
+                messages.extend(recent_history)
+            
+            # 添加当前用户输入
+            if full_prompt:
+                messages.append({"role": "user", "content": full_prompt})
+            
+            print("发送到 API 的完整消息列表：", messages)
             
             # 调用 OpenAI API
-            messages = [{"role": "user", "content": full_prompt}]
             response = self.client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.7,
+                temperature=0.4,
                 response_format={"type": "json_object"}
             )
             return response.choices[0].message.content
@@ -299,11 +324,13 @@ system_message = f"""
     8. Please firstly consider that the caregivers may not have time at the moment.
     9. The dialogue example should be warm and empathetic, showing how to communicate with the care recipient.
     10. The response should be in valid JSON format.
+[偏好]
+    ***
 
 [output format:json]
     emotion: （应该表达给被照护者的情绪）,
     advice: （根据情绪状态和个人偏好提供的具体建议行动）,
-    dialogue: （与被照护者交谈的示例对话，展示如何实施建议）
+    dialogue: （模拟照护者的口吻，参考advice回复被照护者）
 """
 
 documents = [

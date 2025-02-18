@@ -16,6 +16,12 @@ css = """
 .warning {background-color: #e83413 !important; color: #ffffff !important}
 """
 
+# 保存原始的 system message
+ORIGINAL_SYSTEM_MESSAGE = system_message
+
+# 全局对话历史
+conversation_history = []
+
 def start_recording():
     """开始录音"""
     global recording, audio
@@ -108,6 +114,7 @@ def record_audio():
 
 def process_input(preference_file, manual_text, voice_text, history):
     """处理输入并返回API响应"""
+    global conversation_history
     try:
         # 获取当前输入，并立即清空输入框
         current_input = manual_text or voice_text
@@ -121,12 +128,17 @@ def process_input(preference_file, manual_text, voice_text, history):
         print(f"偏好文件: {preference_file.name if preference_file else 'None'}")
         print("="*50)
         
-        # 检查偏好文件
-        preference_path = ""
+        # 读取偏好文件内容
+        preference_content = ""
         if preference_file and os.path.exists(preference_file.name):
-            preference_path = preference_file.name
-        else:
-            print("警告：偏好文件不存在或未提供")
+            try:
+                with open(preference_file.name, 'r', encoding='utf-8') as f:
+                    preference_content = f.read().strip()
+            except Exception as e:
+                print(f"读取偏好文件出错: {e}")
+        
+        # 使用原始 system message 创建新的带偏好的 system message
+        current_system_message = ORIGINAL_SYSTEM_MESSAGE.replace("[偏好]\n    ***", f"[偏好]\n    {preference_content}")
         
         # 初始化OpenAI客户端
         client_openai = OpenAI(
@@ -142,14 +154,14 @@ def process_input(preference_file, manual_text, voice_text, history):
         with open(temp_emotion_path, "w", encoding='utf-8') as f:
             f.write(current_input)
         
-        # 构建文档列表
+        # 构建文档列表 - 只包含用户发言&情绪文件
         documents = [
-            {'path': preference_path, 'prefix': 'Document 1:', 'tag': '偏好'},
-            {'path': temp_emotion_path, 'prefix': 'Document 2:', 'tag': '情绪'},
+            {'path': temp_emotion_path, 'prefix': 'Document 2:', 'tag': '用户发言&情绪'},
         ]
         
-        # 创建MessageHandler实例并调用处理方法
-        handler = MessageHandler(client_openai, documents, system_message)
+        # 创建MessageHandler实例并设置对话历史
+        handler = MessageHandler(client_openai, documents, current_system_message)
+        handler.conversation_history = conversation_history.copy()  # 使用当前的对话历史
         
         # 获取响应
         print(f"发送到API的请求内容：{current_input}")
@@ -159,6 +171,20 @@ def process_input(preference_file, manual_text, voice_text, history):
         try:
             # 解析JSON响应
             response_dict = json.loads(response)
+            
+            # 更新全局对话历史
+            conversation_history.append({
+                "role": "user",
+                "content": f"Document 2:\n<用户发言&情绪>\n{current_input}\n</用户发言&情绪>\n"
+            })
+            conversation_history.append({
+                "role": "assistant",
+                "content": response_dict['dialogue']
+            })
+            
+            # 保持对话历史在最近10轮以内
+            if len(conversation_history) > 20:  # 20表示10轮对话（每轮包含用户和助手各一条消息）
+                conversation_history = conversation_history[-20:]
             
             # 格式化输出文本
             formatted_response = f"情绪状态：{response_dict['emotion']}\n\n建议行动：{response_dict['advice']}\n\n对话示例：{response_dict['dialogue']}"
@@ -193,6 +219,8 @@ def process_input(preference_file, manual_text, voice_text, history):
 
 def clear_history(chat_history):
     """清除对话历史"""
+    global conversation_history
+    conversation_history = []  # 清空全局对话历史
     return ""
 
 def save_history(chat_history):
@@ -295,7 +323,7 @@ def main():
                     gr.Markdown("#### 助手回复")
                     output_text = gr.Textbox(
                         label="助手建议",
-                        lines=15,
+                        lines=10,
                         interactive=False
                     )
         
