@@ -54,7 +54,7 @@ def get_emotion(content):
         """
         
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "你是一个情绪分析专家。"},
                 {"role": "user", "content": prompt}

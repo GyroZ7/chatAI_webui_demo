@@ -4,6 +4,8 @@ from Emotion import get_emotion, parse_emotion_result, listen
 import speech_recognition as sr
 import threading
 import time
+import json
+import os
 
 # 全局变量控制录音状态
 recording = False
@@ -106,57 +108,106 @@ def record_audio():
 
 def process_input(preference_file, manual_text, voice_text, history):
     """处理输入并返回API响应"""
-    input_text = manual_text or voice_text
-    if not input_text:
-        return "请输入文本或使用语音输入", "", "", history
-    
-    # 更新对话历史中的用户输入部分
-    new_history = f"{history}\n### 用户\n{input_text}\n"
-    
-    # 初始化OpenAI客户端
-    client_openai = OpenAI(
-        base_url="https://api.gptsapi.net/v1",
-        api_key="sk-zc47213449f70a2328e93d2ea4e73aa410f26a20511GgIPP"
-    )
-    
-    # 构建documents列表
-    documents = [
-        {'path': preference_file.name, 'prefix': 'Document 1:', 'tag': '偏好'},
-        {'path': "temp_emotion.txt", 'prefix': 'Document 2:', 'tag': '情绪'},
-    ]
-    
-    # 将emotion_text写入临时文件
-    with open("temp_emotion.txt", "w", encoding='utf-8') as f:
-        f.write(input_text)
-    
-    # 创建MessageHandler实例
-    handler = MessageHandler(client_openai, documents, system_message)
-    
-    # 获取响应
-    response = handler.get_and_play_response()
-    
-    # 更新对话历史中的助手回复部分
-    new_history += f"\n### 助手\n{response}\n"
-    
-    # 返回响应、清空输入框的信号和更新后的历史
-    return response, "", "", new_history
+    try:
+        # 获取当前输入，并立即清空输入框
+        current_input = manual_text or voice_text
+        if not current_input:
+            return "请输入文本或使用语音输入", "", "", history
+        
+        # 添加详细的日志
+        print("="*50)
+        print("新的请求开始处理")
+        print(f"输入文本: {current_input}")
+        print(f"偏好文件: {preference_file.name if preference_file else 'None'}")
+        print("="*50)
+        
+        # 检查偏好文件
+        preference_path = ""
+        if preference_file and os.path.exists(preference_file.name):
+            preference_path = preference_file.name
+        else:
+            print("警告：偏好文件不存在或未提供")
+        
+        # 初始化OpenAI客户端
+        client_openai = OpenAI(
+            base_url="https://api.gptsapi.net/v1",
+            api_key="sk-zc47213449f70a2328e93d2ea4e73aa410f26a20511GgIPP"
+        )
+        
+        # 确保临时文件目录存在
+        os.makedirs("temp", exist_ok=True)
+        
+        # 将当前输入写入临时文件
+        temp_emotion_path = os.path.join("temp", "temp_emotion.txt")
+        with open(temp_emotion_path, "w", encoding='utf-8') as f:
+            f.write(current_input)
+        
+        # 构建文档列表
+        documents = [
+            {'path': preference_path, 'prefix': 'Document 1:', 'tag': '偏好'},
+            {'path': temp_emotion_path, 'prefix': 'Document 2:', 'tag': '情绪'},
+        ]
+        
+        # 创建MessageHandler实例并调用处理方法
+        handler = MessageHandler(client_openai, documents, system_message)
+        
+        # 获取响应
+        print(f"发送到API的请求内容：{current_input}")
+        response = handler.process_message(current_input)
+        print(f"API响应内容：{response}")
+        
+        try:
+            # 解析JSON响应
+            response_dict = json.loads(response)
+            
+            # 格式化输出文本
+            formatted_response = f"情绪状态：{response_dict['emotion']}\n\n建议行动：{response_dict['advice']}\n\n对话示例：{response_dict['dialogue']}"
+            
+            # 更新对话历史，添加用户输入
+            new_history = f"{history}\n### 用户\n{current_input}\n\n### 助手\n{formatted_response}\n"
+            
+            # 创建新的语音播放线程
+            if 'dialogue' in response_dict:
+                print("开始新的语音播放")
+                threading.Thread(
+                    target=handler.voice_manager.play_voice,
+                    args=(response_dict['dialogue'],),
+                    daemon=True
+                ).start()
+            
+            return formatted_response, "", "", new_history
+            
+        except json.JSONDecodeError as e:
+            print(f"响应格式解析失败: {e}")
+            print(f"原始响应: {response}")
+            return f"响应格式解析失败: {e}", "", "", history
+        except Exception as e:
+            print(f"处理响应时出错: {e}")
+            return f"处理响应时出错: {e}", "", "", history
+        
+    except Exception as e:
+        print(f"详细错误信息: {str(e)}")
+        import traceback
+        print(f"错误堆栈: {traceback.format_exc()}")
+        return f"处理请求时出错: {str(e)}", "", "", history
 
-def clear_history():
+def clear_history(chat_history):
     """清除对话历史"""
     return ""
 
-def save_history(history):
+def save_history(chat_history):
     """保存对话历史为JSON文件"""
-    if not history:
+    if not chat_history:
         return "对话历史为空"
     
     try:
-        import json
         from datetime import datetime
+        import tkinter as tk
+        from tkinter import filedialog
         
         # 将对话历史按段落分割并解析为列表
         conversations = []
-        sections = history.split('### ')
+        sections = chat_history.split('### ')
         current_user_msg = ""
         
         for section in sections:
@@ -171,8 +222,6 @@ def save_history(history):
                 current_user_msg = ""
         
         # 创建保存对话的文件选择器
-        import tkinter as tk
-        from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
         
@@ -233,7 +282,6 @@ def main():
                         placeholder="识别结果将自动转换，无需操作。如果同时有语音与文本输入，将优先使用文本输入。",
                         interactive=False,
                         lines=3
-                    
                     )
                     with gr.Row():
                         start_button = gr.Button("开始录音")
@@ -254,12 +302,9 @@ def main():
         gr.Markdown("***")
         gr.HTML("<hr style='height: 5px; background-color: black; border: none;'>")
         gr.Markdown("# 对话历史")
-        with gr.Row():
-            # 对话历史（使用Markdown）
-            chat_history = gr.Markdown(
-                label="# 对话历史",
-                value=""
-            )
+        
+        # 对话历史（使用Markdown）
+        chat_history = gr.Markdown(value="")
             
         with gr.Row():
             # 清除和保存按钮
@@ -295,6 +340,7 @@ def main():
         # 处理清除和保存事件
         clear_btn.click(
             fn=clear_history,
+            inputs=[chat_history],
             outputs=[chat_history]
         )
         

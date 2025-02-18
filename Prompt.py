@@ -8,6 +8,9 @@ from aip import AipSpeech
 from pynput import keyboard
 import sys
 import time
+import threading
+import json
+import queue
 
 #openai.api_key = config.openai_api_key
 openai.api_key = "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"
@@ -35,28 +38,147 @@ def xml(prefix, content, tag):
     """
     return f"{prefix}\n<{tag}>\n{content}\n</{tag}>\n"
 
+# 全局语音引擎管理器
+class GlobalVoiceManager:
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(GlobalVoiceManager, cls).__new__(cls)
+                cls._instance._initialize()
+            return cls._instance
+    
+    def _initialize(self):
+        """初始化语音引擎管理器"""
+        self.engine = None
+        self.voice_queue = queue.Queue()
+        self.current_task = None
+        self.is_speaking = False
+        self._stop_event = threading.Event()
+        self._worker_thread = threading.Thread(target=self._process_queue, daemon=True)
+        self._worker_thread.start()
+    
+    def _init_engine(self):
+        """初始化语音引擎"""
+        if self.engine:
+            try:
+                self.engine.stop()
+            except:
+                pass
+        try:
+            self.engine = pyttsx3.init()
+            self.engine.setProperty('rate', 150)
+            self.engine.setProperty('volume', 1.0)
+            voices = self.engine.getProperty('voices')
+            for voice in voices:
+                if "chinese" in voice.name.lower():
+                    self.engine.setProperty('voice', voice.id)
+                    break
+            return True
+        except Exception as e:
+            print(f"语音引擎初始化失败: {e}")
+            self.engine = None
+            return False
+    
+    def _process_queue(self):
+        """处理语音队列的工作线程"""
+        while True:
+            try:
+                if self._stop_event.is_set():
+                    self.voice_queue.queue.clear()
+                    continue
+                    
+                text = self.voice_queue.get()
+                self.is_speaking = True
+                
+                if self._init_engine():
+                    try:
+                        self.engine.say(text)
+                        self.engine.runAndWait()
+                    except Exception as e:
+                        print(f"语音播放出错: {e}")
+                    finally:
+                        if self.engine:
+                            try:
+                                self.engine.stop()
+                            except:
+                                pass
+                            self.engine = None
+                
+                self.is_speaking = False
+                self.voice_queue.task_done()
+                
+            except queue.Empty:
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"语音处理出错: {e}")
+                self.is_speaking = False
+    
+    def stop_current(self):
+        """停止当前语音播放"""
+        self._stop_event.set()
+        if self.engine:
+            try:
+                self.engine.stop()
+            except:
+                pass
+        self.voice_queue.queue.clear()
+        time.sleep(0.1)  # 给予一点时间让队列清空
+        self._stop_event.clear()
+    
+    def play(self, text):
+        """添加文本到语音队列"""
+        self.stop_current()  # 停止当前播放
+        self.voice_queue.put(text)
+
+# 使用全局语音管理器的VoiceManager类
 class VoiceManager:
     def __init__(self):
-        self.engine = pyttsx3.init()
-        self.voices = self.engine.getProperty('voices')
-        self.engine.setProperty('voice', self.voices[0].id)
-        self.engine.setProperty('rate', 150)
-
+        self.global_manager = GlobalVoiceManager()
+    
     def play_voice(self, text):
-        """
-        将文本转换为语音并播放
-        Args:
-            text (str): 需要播放的文本内容
-        """
-        self.engine.say(text)
-        self.engine.runAndWait()
+        """播放语音"""
+        try:
+            self.global_manager.play(text)
+        except Exception as e:
+            print(f"语音播放出错: {e}")
 
 class MessageHandler:
-    def __init__(self, client_openai, documents, system_message):
-        self.client_openai = client_openai
+    def __init__(self, client, documents, system_message):
+        self.client = client
         self.documents = documents
         self.system_message = system_message
         self.voice_manager = VoiceManager()
+
+    def process_message(self, input_text):
+        """
+        处理输入消息并返回JSON格式的响应
+        Args:
+            input_text (str): 输入的文本消息
+        Returns:
+            str: JSON格式的响应
+        """
+        # 更新临时用户发言&情绪文件的内容
+        temp_emotion_path = os.path.join("temp", "temp_emotion.txt")
+        os.makedirs("temp", exist_ok=True)
+        with open(temp_emotion_path, "w", encoding='utf-8') as f:
+            f.write(input_text)
+        
+        # 确保文档列表使用最新的临时文件
+        current_documents = []
+        for doc in self.documents:
+            if doc['tag'] == '用户发言&情绪':
+                doc = {'path': temp_emotion_path, 'prefix': doc['prefix'], 'tag': doc['tag']}
+            current_documents.append(doc)
+        
+        # 获取响应
+        response = self.get_completion_from_document(
+            current_documents, 
+            self.system_message
+        )
+        return response
 
     def get_and_play_response(self):
         """
@@ -72,28 +194,47 @@ class MessageHandler:
         return response
 
     def get_completion_from_document(self, documents, system_message, model="gpt-4o"):
-        # 读取文档内容
-        full_prompt = ""
-        for idx, doc_info in enumerate(documents):
-            # 读取每个文档的内容
-            with open(doc_info['path'], 'r', encoding='utf-8') as file:
-                document_content = file.read()
+        """获取API响应"""
+        try:
+            # 读取文档内容
+            full_prompt = ""
+            for doc_info in documents:
+                if not os.path.exists(doc_info['path']):
+                    print(f"警告：文件不存在 {doc_info['path']}")
+                    continue
+                    
+                try:
+                    with open(doc_info['path'], 'r', encoding='utf-8') as file:
+                        document_content = file.read().strip()
+                        if document_content:
+                            tagged_content = xml(doc_info['prefix'], document_content, doc_info['tag'])
+                            full_prompt += tagged_content
+                except Exception as e:
+                    print(f"读取文件出错 {doc_info['path']}: {e}")
+                    continue
 
-            # 使用xml函数对文档内容进行标签处理
-            tagged_content = xml(doc_info['prefix'], document_content, doc_info['tag'])
+            # 添加系统消息
+            full_prompt += f"\n{system_message}"
             
-            # 将处理后的内容添加到完整的 prompt 中
-            full_prompt += tagged_content
-        full_prompt += f"\n{system_message}"
-        # 构建消息列表
-        messages = [{"role": "user", "content": full_prompt}]
-        # 调用 OpenAI API 获取生成的响应
-        response = self.client_openai.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content
+            print("发送到 API 的完整 Prompt：", full_prompt)
+            
+            # 调用 OpenAI API
+            messages = [{"role": "user", "content": full_prompt}]
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.7,
+                response_format={"type": "json_object"}
+            )
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"API 调用出错: {e}")
+            return json.dumps({
+                "emotion": "错误",
+                "advice": f"系统处理出错: {str(e)}",
+                "dialogue": "对不起，系统暂时出现了问题，请稍后再试。"
+            })
 
 system_message = f"""
 [Personality]
@@ -102,10 +243,10 @@ system_message = f"""
     3. You should offer advice using concise declarative sentences and directly present actions.
     [Background]
         Caregivers face the challenging to manage the emotional states of care recipients and lack of response methods. 
-        Providing informations on [情绪] and [偏好] will help facilitate caregiving with care recipients.  
+        Providing informations on [用户发言&情绪] and [偏好] will help facilitate caregiving with care recipients.  
 [Think]
     1. The care recipient's emotional state.
-    2. Based on [情绪], select one of the most appropriate caregiving methods provided.
+    2. Based on [用户发言&情绪], select one of the most appropriate caregiving methods provided.
     3. Based on [偏好] and caregiving methods, provide advice.
     
     [Caregiving methods]
@@ -126,7 +267,7 @@ system_message = f"""
             [Purpose] 
                 The caregiver needs to pay attention to the care recipient's negative emotions and take appropriate approachs.
             [conditions]
-                You need to choose one of the most appropriate approachs based on the content of the [情绪]:
+                You need to choose one of the most appropriate approachs based on the content of the [用户发言&情绪]:
                 1. When negative emotions stem from the experiences and feelings, take an encouraging and soothing approach.
                 2. When negative emotions arise from the caregivings, take a break approach.
             [Content format reference]
@@ -148,22 +289,26 @@ system_message = f"""
                 2. Do a good job; let her/him be alone for a while.
 
 [Rules to follow]
-    1. Advice should briefly and concisely,  excluding the impact and consequences of the advice.
+    1. Advice should briefly and concisely, excluding the impact and consequences of the advice.
     2. Advice must use the declarative sentence format.
-    3. Advice should be tailored from [偏好. 
+    3. Advice should be tailored from [偏好].
     4. Your service target is one caregiver. 
     5. Default advice language is Chinese. 
-    6. Your responses must consider both [情绪] and [偏好].
+    6. Your responses must consider both [用户发言&情绪] and [偏好].
     7. You must combine with two documents and generate one advice.
-    8. Please fiestly consider that the caregivers may not have time at the moment. For example: 1. ... when you have free time. 2. Once you're free, you can...
-[output format]
-    情绪: content(综合判断，直接输出：积极/稳定/消极)     
-    建议: content(参考content format reference。直接输出行动)
+    8. Please firstly consider that the caregivers may not have time at the moment.
+    9. The dialogue example should be warm and empathetic, showing how to communicate with the care recipient.
+    10. The response should be in valid JSON format.
+
+[output format:json]
+    emotion: （应该表达给被照护者的情绪）,
+    advice: （根据情绪状态和个人偏好提供的具体建议行动）,
+    dialogue: （与被照护者交谈的示例对话，展示如何实施建议）
 """
 
 documents = [
-    {'path': "Generated\Text\zhaonainai.txt" , 'prefix': 'Document 1:', 'tag': '偏好'},
-    {'path': "Generated\Text\emotion.txt", 'prefix': 'Document 2:', 'tag': '情绪'}, 
+    {'path': "zhaonainai.txt", 'prefix': 'Document 1:', 'tag': '偏好'},
+    {'path': "temp_emotion.txt", 'prefix': 'Document 2:', 'tag': '用户发言&情绪'}, 
     # 可以继续添加更多的文档
 ]
 
