@@ -13,8 +13,7 @@ import json
 import queue
 
 #openai.api_key = config.openai_api_key
-openai.api_key = "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"
-#os.environ["OPENAI_API_KEY"] = 'sk-o3bQNa5VAcsu1FbkD36d67Db1a264861Bf1c09766570Ee2d '
+openai.api_key = "your_api_key"
 model = "gpt-4o"
 APP_ID='107510510'
 API_KEY='4fXMb0q9hDMWES2Ws3vQBuNq'
@@ -22,8 +21,8 @@ SECRET_KEY='JvX5mgQuGrCTiE2kYZmWSZdtWTg9BWW1'
 client=AipSpeech (APP_ID, API_KEY, SECRET_KEY)
 
 client_OpenAI = OpenAI(
-      base_url="https://api.gptsapi.net/v1",
-      api_key="sk-zc47213449f70a2328e93d2ea4e73aa410f26a20511GgIPP"
+      base_url="your_url",
+      api_key="your_api_key"
   )
 
 def xml(prefix, content, tag):

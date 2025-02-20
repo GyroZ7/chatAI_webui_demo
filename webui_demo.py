@@ -142,8 +142,8 @@ def process_input(preference_file, manual_text, voice_text, history):
         
         # 初始化OpenAI客户端
         client_openai = OpenAI(
-            base_url="https://api.gptsapi.net/v1",
-            api_key="sk-zc47213449f70a2328e93d2ea4e73aa410f26a20511GgIPP"
+            base_url="your_url",
+            api_key="your_api_key"
         )
         
         # 确保临时文件目录存在

@@ -5,8 +5,8 @@ from pathlib import Path
 
 # OpenAI配置
 client = OpenAI(
-    api_key='sk-zc47213449f70a2328e93d2ea4e73aa410f26a20511GgIPP',  # 请替换为您的OpenAI API密钥
-    base_url="https://api.gptsapi.net/v1"  # 设置自定义API基础地址
+    api_key='your_api_key',  # 请替换为您的OpenAI API密钥
+    base_url="your_url"  # 设置自定义API基础地址
 )
 
 now = datetime.datetime.now()
